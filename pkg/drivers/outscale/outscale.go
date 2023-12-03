@@ -17,8 +17,8 @@ import (
 
 const (
 	defaultOscRegion       = "eu-west-2"
-	defaultOscOMI          = "ami-2cf1fa3e"  // Debian 10
-	defaultOscVmType       = "tinav2.c1r2p3" //t2.small
+	defaultOscOMI          = "ami-cd8d714e" // Ubuntu 22
+	defaultOscVmType       = "tinav6.c4r8p1"
 	defaultDockerPort      = 2376
 	defaultSSHPort         = 22
 	defaultSSHUsername     = "outscale"
@@ -39,6 +39,7 @@ const (
 	flagRootDiskIo1Iops    = "outscale-root-disk-iops"
 	flagSubnetId           = "outscale-subnet-id"
 	flagK8sNodeNameTag     = "outscale-kubernetes-node-name-autotag"
+	flagUserDataFile       = "outscale-user-data-file"
 )
 
 type OscDriver struct {
@@ -69,6 +70,7 @@ type OscDriver struct {
 	subnetId           string
 	netId              string
 	tagK8sNodeName     bool
+	userDataFile       string
 }
 
 type OscApiData struct {
@@ -174,6 +176,15 @@ func (d *OscDriver) Create() error {
 
 	if !d.PublicCloud {
 		createVmRequest.SetSubnetId(d.subnetId)
+
+		if d.userDataFile != "" {
+			buf, err := os.ReadFile(d.userDataFile)
+			if err != nil {
+				return err
+			}
+			createVmRequest.SetUserData(string(buf))
+		}
+
 	}
 
 	var createVmResponse osc.CreateVmsResponse
@@ -360,6 +371,11 @@ func (d *OscDriver) GetCreateFlags() []mcnflag.Flag {
 			Name:   flagK8sNodeNameTag,
 			Usage:  "Automatically add kubernetes tag 'OscK8sNodeName' to the instance (Useful for the CCM)",
 		},
+		mcnflag.StringFlag{
+			EnvVar: "",
+			Name:   flagUserDataFile,
+			Usage:  "Path to cloud-init user-data file",
+		},
 	}
 }
 
@@ -491,6 +507,11 @@ func (d *OscDriver) PreCreateCheck() error {
 		d.netId = netId
 
 		log.Debugf("The Subnet Id '%v' exists in NetId '%v'", d.subnetId, d.netId)
+	}
+	if d.userDataFile != "" {
+		if _, err := os.Stat(d.userDataFile); os.IsNotExist(err) {
+			return fmt.Errorf("user-data file %s could not be found", d.userDataFile)
+		}
 	}
 
 	return nil
@@ -641,6 +662,9 @@ func (d *OscDriver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHKeyPath = d.GetSSHKeyPath()
 	d.SSHUser = d.GetSSHUsername()
 	d.SSHPort, _ = d.GetSSHPort()
+
+	// UserData
+	d.userDataFile = flags.String(flagUserDataFile)
 
 	return nil
 }
