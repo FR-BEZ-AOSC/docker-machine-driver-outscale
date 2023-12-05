@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 
 	retry "github.com/avast/retry-go"
 	"github.com/docker/machine/libmachine/drivers"
@@ -13,6 +18,7 @@ import (
 	"github.com/docker/machine/libmachine/mcnflag"
 	"github.com/docker/machine/libmachine/state"
 	osc "github.com/outscale/osc-sdk-go/v2"
+	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -25,6 +31,7 @@ const (
 	defaultRootDiskType    = "gp2"
 	defaultRootDiskSize    = 15
 	defaultRootDiskIo1Iops = 1500
+	defaultUserDataFile    = ""
 
 	flagAccessKey          = "outscale-access-key"
 	flagSecretKey          = "outscale-secret-key"
@@ -76,6 +83,15 @@ type OscDriver struct {
 type OscApiData struct {
 	client  *osc.APIClient
 	context context.Context
+}
+
+type CloudConfig struct {
+	WriteFiles []struct {
+		Content     string `yaml:"content"`
+		Encoding    string `yaml:"encoding"`
+		Path        string `yaml:"path"`
+		Permissions string `yaml:"permissions"`
+	} `yaml:"write_files"`
 }
 
 // NewDriver creates and returns a new instance of the Outscale driver
@@ -176,15 +192,30 @@ func (d *OscDriver) Create() error {
 
 	if !d.PublicCloud {
 		createVmRequest.SetSubnetId(d.subnetId)
+	}
+	if d.userDataFile != "" {
+		buf, err := os.ReadFile(d.userDataFile)
+		if err != nil {
+			return err
+		}
+		// this is a cloud-config file - Extract the content field
+		var cloudconfig CloudConfig
+		err = yaml.Unmarshal(buf, &cloudconfig)
+		if err != nil {
+			return err
+		}
 
-		if d.userDataFile != "" {
-			buf, err := os.ReadFile(d.userDataFile)
+		// we extract the content of the first file in write_files
+		if len(cloudconfig.WriteFiles) > 0 {
+			decompressedContent, err := decodeAndDecompress(cloudconfig.WriteFiles[0].Content)
 			if err != nil {
 				return err
 			}
-			createVmRequest.SetUserData(string(buf))
-		}
 
+			decompressedContent = base64.StdEncoding.EncodeToString([]byte("#!/usr/bin/env sh\n" + decompressedContent))
+			// fmt.Println("Decompressed Content:", decompressedContent)
+			createVmRequest.SetUserData(string(decompressedContent))
+		}
 	}
 
 	var createVmResponse osc.CreateVmsResponse
@@ -375,6 +406,7 @@ func (d *OscDriver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "",
 			Name:   flagUserDataFile,
 			Usage:  "Path to cloud-init user-data file",
+			Value:  defaultUserDataFile,
 		},
 	}
 }
@@ -458,6 +490,9 @@ func (d *OscDriver) GetState() (state.State, error) {
 
 // PreCreateCheck allows for pre-create operations to make sure a driver is ready for creation
 func (d *OscDriver) PreCreateCheck() error {
+
+	fmt.Printf("d.userDataFile=%s", d.userDataFile)
+
 	oscApi, err := d.getClient()
 	if err != nil {
 		return err
@@ -755,4 +790,26 @@ func validateDiskType(diskType string) bool {
 	default:
 		return false
 	}
+}
+
+func decodeAndDecompress(data string) (string, error) {
+	// Base64 decode
+	decodedData, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+
+	// Gzip decompress
+	gzipReader, err := gzip.NewReader(bytes.NewBuffer(decodedData))
+	if err != nil {
+		return "", err
+	}
+	defer gzipReader.Close()
+
+	uncompressedData, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return "", err
+	}
+
+	return string(uncompressedData), nil
 }
