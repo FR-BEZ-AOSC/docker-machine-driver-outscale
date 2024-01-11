@@ -21,6 +21,7 @@ var (
 	kubeProxyPort         int32 = 10256
 	canal1                int32 = 8472 // Canal/Flannel VXLAN overlay networking
 	canal2                int32 = 4789 // Flannel VXLAN overlay networking
+	rkeNodeRegistration   int32 = 9345 // RKE2 Node registration. Port should be open on all server nodes to all other nodes in the cluster.
 )
 
 func addSecurityGroupRule(d *OscDriver, sgId string, request *osc.CreateSecurityGroupRuleRequest) error {
@@ -79,7 +80,7 @@ func createDefaultSecurityGroup(d *OscDriver) error {
 		SecurityGroupName: fmt.Sprintf("docker-machine-%s-%d", d.GetMachineName(), time.Now().Unix()),
 	}
 
-	if ! d.PublicCloud {
+	if !d.PublicCloud {
 		request.SetNetId(d.netId)
 	}
 
@@ -182,6 +183,13 @@ func createDefaultSecurityGroup(d *OscDriver) error {
 	ruleRequest = buildSecurityGroupRule("udp", "Inbound", d.SecurityGroupId, canal2, canal2, "0.0.0.0/0")
 	if err := addSecurityGroupRule(d, d.SecurityGroupId, ruleRequest); err != nil {
 		log.Error("Error while adding the kube port rule in the SecurityGroup")
+		return err
+	}
+
+	//RKE2 Node registration. Port should be open on all server nodes to all other nodes in the cluster.
+	ruleRequest = buildSecurityGroupRule("tcp", "Inbound", d.SecurityGroupId, rkeNodeRegistration, rkeNodeRegistration, "0.0.0.0/0")
+	if err := addSecurityGroupRule(d, d.SecurityGroupId, ruleRequest); err != nil {
+		log.Error("Error while adding the Rke2NodeRegistration rule in the SecurityGroup")
 		return err
 	}
 
