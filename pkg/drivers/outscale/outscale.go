@@ -318,7 +318,7 @@ func (d *OscDriver) Create() error {
 
 // DriverName returns the name of the driver
 func (d *OscDriver) DriverName() string {
-	return "outscale"
+	return "outscaleaosc"
 }
 
 // GetCreateFlags returns the mcnflag.Flag slice representing the flags
